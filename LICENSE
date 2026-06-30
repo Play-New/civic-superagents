@@ -1,0 +1,16 @@
+# Licenze — Civic SuperAgents
+
+Bene comune a doppia licenza (cfr. CLAUDE.md, IDEA.md):
+
+- **Codice** (ingestor, MCP server, schema, script): **EUPL-1.2**
+  → testo integrale in [`LICENSES/EUPL-1.2.txt`](LICENSES/EUPL-1.2.txt) · `SPDX-License-Identifier: EUPL-1.2`
+- **Prompt, documentazione, note, mappe, glossari**: **CC-BY-SA-4.0**
+  → testo integrale in [`LICENSES/CC-BY-SA-4.0.txt`](LICENSES/CC-BY-SA-4.0.txt) · `SPDX-License-Identifier: CC-BY-SA-4.0`
+
+## Dati a monte
+
+Il commons **non ridistribuisce** i dataset pubblici: li interroga e li rende leggibili. Ogni fonte mantiene la **propria** licenza (CC-BY, CC0, IODL-2.0, ODbL, AGPL, ecc.), registrata per-dataset in `meta.fonti.license` e nelle note `notes/<fonte>.md`. Prima di ridistribuire qualsiasi dato a valle, verificare la licenza della fonte (diverse sono ancora **da verificare** — vedi le note).
+
+## Attribuzione
+
+Civic SuperAgents — community SuperAgents (skool.com/superagents). Citare le fonti pubbliche secondo la citation policy (CLAUDE.md §5).

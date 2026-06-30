@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "descrizione": "SIOPE → italiano civico (codici gestionali enti locali).",
+    "stato": "NON necessario per il lake attuale: il bilancio (mart.bilancio_comune) usa le MISSIONI armonizzate, già leggibili. Popolare solo se si ingeriranno i codici SIOPE economici.",
+    "fonte_verificata_2026_06_30": "RGS — Glossario codici gestionali enti locali (.xls 2014 e successivi): https://www.rgs.mef.gov.it/_Documenti/VERSIONE-I/e-GOVERNME1/SIOPE/glossario_codici_gestionali/Glossario-Enti-locali-per-lanno-2014-e-successivi_II.xls",
+    "quirk": "I codici SIOPE enti locali coprono 2006-2016; dal 2017 SIOPE+ usa il piano dei conti finanziario (allegato D.Lgs. 118/2011). Versionare il dizionario per anno.",
+    "schema": { "codice": "string", "descrizione_ufficiale": "string", "descrizione_civica": "string", "livello": "int" }
+  },
+  "voci": []
+}

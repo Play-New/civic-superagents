@@ -1,0 +1,17 @@
+# CODEOWNERS — review minimo. Aggiornare con gli handle reali dei maintainer.
+# La curation (glossari, note, test) è il manufatto difendibile → review attenta.
+
+# Default
+*                       @civic-superagents-maintainers
+
+# Fonte di verità per le sessioni LLM e la strategia
+/CLAUDE.md              @civic-superagents-maintainers
+/IDEA.md                @civic-superagents-maintainers
+
+# Curation difendibile (CLAUDE.md §4): glossari, note, test set
+/glossary/              @civic-superagents-maintainers
+/notes/                 @civic-superagents-maintainers
+/tests/                 @civic-superagents-maintainers
+
+# Schema e provenance (citation policy)
+/supabase/migrations/   @civic-superagents-maintainers

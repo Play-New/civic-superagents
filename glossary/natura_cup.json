@@ -1,0 +1,10 @@
+{
+  "_meta": {
+    "descrizione": "Natura/tipologia CUP → descrizione.",
+    "stato": "NON necessario per il lake attuale: OpenCUP non è ingerito (PNRR via OpenPNRR, coesione via OpenCoesione). Popolare se/quando si ingerisce OpenCUP.",
+    "fonte_verificata_2026_06_30": "Niente tabella di decodifica standalone: la decode natura/tipologia è EMBEDDED in OpendataProgetti (colonne CODI_CODICE_NATURA/DESC_DESCRIZIONE_NATURA, ecc.) → SELECT DISTINCT. Riferimento metodologico DIPE: https://www.programmazioneeconomica.gov.it/media/enyj0d3z/le-classificazioni-del-sistema-cup.pdf",
+    "quirk": "Albero: natura → tipologia → settore → sottosettore → categoria. Es. verificato: natura '3' = 'REALIZZAZIONE DI LAVORI PUBBLICI'. NON inventare gli altri codici: derivarli via SELECT DISTINCT.",
+    "schema": { "codice": "string", "descrizione": "string" }
+  },
+  "voci": []
+}

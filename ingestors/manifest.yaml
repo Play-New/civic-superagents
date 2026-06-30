@@ -1,0 +1,249 @@
+# manifest.yaml — registro delle fonti del data lake.
+# Macchina-leggibile: ogni ingestor legge la sua entry da qui. È anche la versione
+# operativa della mappa (vedi notes/mappa-open-data-civici.md per la narrazione).
+# Endpoint verificati live 2026-06-29. LE API ITALIANE CAMBIANO IN SILENZIO: riverificare prima di ogni release.
+#
+# campi: id, tema, classe (wedge|genesis|trap), endpoint, formato, license,
+#        granularita, cadenza, phase, schema_target, quirks
+
+meta:
+  verificato: "2026-06-29"
+  note: "vedi notes/mappa-open-data-civici.md per la mappa completa e le trappole"
+
+sources:
+
+  # ---- SPINA (phase 0) ----
+  - id: geojson_italy_comuni
+    tema: territorio
+    classe: enabling
+    endpoint: "https://raw.githubusercontent.com/openpolis/geojson-italy/master/geojson/limits_IT_municipalities.geojson"
+    formato: geojson
+    license: "vedi repo openpolis/geojson-italy"
+    granularita: comune
+    cadenza: raramente
+    phase: 0
+    schema_target: geo.comuni
+    quirks: "~38 MB. Allinea pro_com (ISPRA) e codice_istat. Integrare popolazione da ISTAT."
+
+  # ---- WEDGES (phase 1) ----
+  - id: ispra_idrogeo
+    tema: frane_alluvioni
+    classe: wedge
+    endpoint: "https://idrogeo.isprambiente.it/api"            # /api/pir/comuni  /api/iffi/comuni
+    formato: json
+    license: "CC-BY-4.0 (frane) / CC-BY-SA-4.0 (alluvioni); codice API AGPL-3.0"
+    granularita: comune
+    cadenza: annuale
+    phase: 1
+    schema_target: mart.idrogeo_comune
+    quirks: "API REST per-comune via pro_com (7.899 pir / 7.904 iffi). Versione 2.0.0-dev pre-release."
+
+  - id: ispra_catasto_rifiuti
+    tema: rifiuti
+    classe: wedge
+    endpoint: "https://www.catasto-rifiuti.isprambiente.it/index.php?pg=getDettaglioComunale&aa=2024"  # csv via getDettaglioComunale.csv.php?aa=YYYY
+    formato: csv
+    license: "ISPRA (verificare)"
+    granularita: comune
+    cadenza: annuale
+    phase: 1
+    schema_target: mart.rifiuti_comune_anno
+    quirks: "latest_usable_year=2024 (2025 restituisce ~535 B vuoti). CSV con codice ISTAT, frazioni, % RD."
+
+  - id: ispra_consumo_suolo
+    tema: consumo_suolo
+    classe: wedge
+    endpoint: "https://www.isprambiente.gov.it/it/attivita/suolo-e-territorio/suolo/il-consumo-di-suolo/i-dati-sul-consumo-di-suolo"
+    formato: xlsx+shp
+    license: "ISPRA (verificare)"
+    granularita: comune
+    cadenza: annuale
+    phase: 1
+    schema_target: mart.consumo_suolo_comune
+    quirks: "URL CAMBIATO (vecchio /i-dati = 404). Edizione 2025, dati al 2024. XLSX + shapefile per comune."
+
+  - id: aria_lombardia
+    tema: aria
+    classe: wedge
+    endpoint: "https://www.dati.lombardia.it/resource/nicp-bhqi.json"   # stazioni: ib47-atvt
+    formato: socrata-json
+    license: "CC0-1.0 (per-dataset, verificare sempre)"
+    granularita: stazione->comune
+    cadenza: giornaliera
+    phase: 1
+    schema_target: mart.aria_misure
+    quirks: "SODA API. Filtro stato='VA', scarta valore=-9999. Pilota Lombardia; EEA download = fallback nazionale. ID Socrata possono scadere -> discovery via catalog API EU."
+
+  - id: miur_scuola
+    tema: scuola
+    classe: wedge
+    endpoint: "https://dati.istruzione.it/opendata/"   # SPARQL: /opendata/opendata/sparql/endpoint/
+    formato: csv+sparql
+    license: "IODL-2.0"
+    granularita: edificio
+    cadenza: annuale
+    phase: 1
+    schema_target: mart.scuola_edificio
+    quirks: "Bulk CSV/JSON/RDF/XML + SPARQL (path lungo). Domini: scuole, edilizia scolastica, personale, studenti."
+
+  # ---- STATISTICA TRASVERSALE (phase 2) ----
+  - id: istat_sdmx
+    tema: multi
+    classe: genesis
+    endpoint: "https://esploradati.istat.it/SDMXWS/rest/v2/"   # preferire v2 (JSON pulito)
+    formato: sdmx-json
+    license: "CC-BY (ISTAT)"
+    granularita: comune|provincia|regione
+    cadenza: variabile
+    phase: 2
+    schema_target: "mart.* (comparazione mio comune vs media)"
+    quirks: "USARE v2 (/rest/v2/structure/dataflow/ e /data). v1 ha bug off-by-one su endPeriod. ~4.876 dataflow: demografia, welfare, cultura, scuola, lavoro."
+
+  # ---- MONEY / GENESIS (phase 2) ----
+  - id: bdap
+    tema: spesa
+    classe: genesis
+    endpoint: "https://bdap-opendata.rgs.mef.gov.it/SpodCkanApi/api/1/rest/dataset"
+    formato: ckan-like
+    license: "CC-BY"
+    granularita: comune
+    cadenza: annuale
+    phase: 2
+    schema_target: "mart.bilancio_comune (0005)"
+    quirks: "Endpoint custom (NON /api/3/). q= search rotto -> paginare client-side. ~3.831 dataset. Soldipubblici morto -> usare BDAP pagamenti_bilancio_dello_stato come proxy SIOPE."
+
+  - id: opencoesione
+    tema: pnrr_coesione
+    classe: genesis
+    endpoint: "https://opencoesione.gov.it/it/opendata/dataset/progetti_esteso_lom/"   # aggregati: /it/api/aggregati/
+    formato: csv-bulk
+    license: "CC-BY"
+    granularita: comune
+    cadenza: quadrimestrale
+    phase: 2
+    schema_target: "mart.pnrr_progetto (0005)"
+    quirks: "Bulk regionale (LOM ~86 MB) invece del nazionale. 1.83M progetti / €358 mld snapshot 2026-02-28."
+
+  # ---- GOVERNO (phase 2/3) ----
+  - id: dait_amministratori
+    tema: governo
+    classe: wedge
+    endpoint: "https://dait.interno.gov.it/elezioni/open-data"
+    formato: csv
+    license: "verificare prima di citare"
+    granularita: comune
+    cadenza: continua
+    phase: 2
+    schema_target: "mart.amministratori_comune (0006)"
+    quirks: "41 dataset, 'in carica' aggiornato 2026-06. Eligendo storico (risultati per comune dal 1946) come complemento."
+
+  - id: normattiva
+    tema: governo_normativa
+    classe: enabling
+    endpoint: "https://api.normattiva.it"   # portale dati: https://dati.normattiva.it
+    formato: akoma-ntoso+json
+    license: "CC-BY-4.0"
+    granularita: nazionale
+    cadenza: continua
+    phase: 2
+    schema_target: "knowledge base (Helper FOIA)"
+    quirks: "NUOVO: in produzione dal 01/01/2026 (prima nessuna API). Auth/rate-limit DA VERIFICARE."
+
+  # ---- FAN-OUT NAZIONALE (phase 3) ----
+  - id: gse_atlaimpianti_cer
+    tema: energia
+    classe: wedge
+    endpoint: "https://www.gse.it/dati-e-scenari/atlaimpianti"
+    formato: csv
+    license: "GSE (verificare)"
+    granularita: impianto|comune
+    cadenza: variabile
+    phase: 3
+    schema_target: "mart.energia_* (0007)"
+    quirks: "Atlaimpianti per-impianto (~790k); Elenco Configurazioni CER per comune/prov/reg."
+
+  - id: iccu_biblioteche
+    tema: cultura
+    classe: wedge
+    endpoint: "https://opendata.anagrafe.iccu.sbn.it/"
+    formato: zip
+    license: "CC0"
+    granularita: biblioteca->comune
+    cadenza: giornaliera
+    phase: 3
+    schema_target: "mart.biblioteche_comune (0007)"
+    quirks: "Unico wedge pulito della cultura. Geocodato, ISIL->comune. Musei via ISTAT (un flusso per-comune)."
+
+  - id: eea_bathing_water
+    tema: acque_balneazione
+    classe: wedge
+    endpoint: "https://www.eea.europa.eu/data-and-maps/data/bathing-water-directive-status-of-bathing-water-15"
+    formato: xlsx+shp
+    license: "EEA"
+    granularita: sito->comune
+    cadenza: annuale
+    phase: 3
+    schema_target: "mart.balneazione_* (0007)"
+    quirks: "Risolve il gap acque: Min. Salute portaleacque = SPA-only (refutato). EEA WISE per-sito georef -> comune."
+
+  # ---- IMPLEMENTATI (source-id reale del codice; vedi notes/<fonte>.md per i quirk) ----
+  # NB: alcuni id qui sopra sono planning-era e differiscono dal source-id nel codice
+  # (aria_lombardia=dati_lombardia_aria, gse_atlaimpianti_cer=gse_cer, eea_bathing_water=eea_balneazione, bdap=bdap_rendiconto).
+  - id: bdap_rendiconto
+    tema: spesa_missione
+    classe: genesis
+    endpoint: "https://openbdap.rgs.mef.gov.it/fet/GetDocuments?type=Rendiconto&year={YYYY}&country={Regione}"
+    formato: csv-zip
+    license: "MEF-RGS (verificare)"
+    granularita: comune
+    cadenza: annuale
+    phase: 2
+    schema_target: mart.bilancio_comune
+    quirks: "portale FET (non CKAN); filtro Codice Tipologia Soggetto=ELCOMU; latin-1; Sardegna usa codici provincia non-ISTAT (fallback nome); nazionale 2024 99%"
+
+  - id: openpnrr
+    tema: pnrr
+    classe: genesis
+    endpoint: "https://openpnrr.s3.amazonaws.com/media/progetti.csv + progetti_territori.csv"
+    formato: csv
+    license: "ODbL-1.0"
+    granularita: comune
+    cadenza: mensile
+    phase: 2
+    schema_target: "mart.pnrr_progetto (+ _comune)"
+    quirks: "PNRR vero (ReGiS-derived); istat_id tipologia=C; importi non ripartiti; stato per-progetto non pubblico"
+
+  - id: istat_welfare
+    tema: welfare_asili
+    classe: wedge
+    endpoint: "https://esploradati.istat.it/SDMXWS/rest/v2/data/dataflow/IT1/47_850_DF_DCIS_SERVSOCEDU1_3/1.0/..."
+    formato: sdmx-csv
+    license: "CC-BY (ISTAT)"
+    granularita: comune
+    cadenza: annuale
+    phase: 3
+    schema_target: mart.welfare_comune
+    quirks: "curl -g (WAF 500a undici); OR-list '+' rotto -> una query per indicatore; source-id=istat_sdmx"
+
+  # ---- TRAPPOLE (NON ingerire come wedge — dichiarare 'non pubblicato') ----
+  - id: pnla_liste_attesa
+    tema: sanita_liste_attesa
+    classe: trap
+    endpoint: "https://www.agenas.gov.it (cruscotto PNLA)"
+    formato: dashboard
+    license: n/a
+    granularita: n/a
+    phase: never
+    schema_target: none
+    quirks: "Solo dashboard, nessun download/API, non su roadmap pubblica. Gestire con onestà."
+
+  - id: acqua_potabile
+    tema: acque_potabili
+    classe: trap
+    endpoint: "n/a (AnTeA/ISS annunciato, non online)"
+    formato: none
+    license: n/a
+    granularita: n/a
+    phase: never
+    schema_target: none
+    quirks: "Nessuna fonte aperta machine-readable per-comune oggi."

@@ -1,0 +1,30 @@
+# Secrets — Supabase keys, service role, etc. NEVER commit
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Raw data lake landing zone — lives in Supabase Storage, not in git.
+# Local snapshots used for transforms are reproducible from the manifest, so ignore.
+raw/
+*.zip
+*.csv
+*.parquet
+*.xlsx
+*.shp
+# keep small reference fixtures explicitly if ever needed:
+!tests/fixtures/**
+
+# DuckDB local transform artifacts
+*.duckdb
+*.duckdb.wal
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
