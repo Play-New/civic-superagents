@@ -1,19 +1,18 @@
 // OpenPNRR -> mart.pnrr_progetto + mart.pnrr_progetto_comune (real PNRR per comune, CUP-level).
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
+import { curlToFile } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
 import { parseDotNumber, loadComuneSet, bulkUpsert } from './_framework/util'
 import { parse } from 'csv-parse'
 import { createReadStream, readFileSync, rmSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { gzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SRC = 'openpnrr'
-const SNAP = '2026-06-29'
 const PROGETTI = 'https://openpnrr.s3.amazonaws.com/media/progetti.csv'
 const TERRITORI = 'https://openpnrr.s3.amazonaws.com/media/progetti_territori.csv'
-const UA = 'Mozilla/5.0 (civic-superagents)'
 
 function misComp(codice: string | undefined): { mis: string | null; comp: string | null } {
   const m = (codice ?? '').trim().match(/^(M\d+)(C\d+)?/)
@@ -30,16 +29,19 @@ async function main() {
   const valid = await loadComuneSet()
   const pTerr = join(tmpdir(), 'openpnrr_territori.csv')
   const pProg = join(tmpdir(), 'openpnrr_progetti.csv')
-  execFileSync('curl', ['-sS', '--fail', '-A', UA, '-o', pTerr, TERRITORI], { maxBuffer: 1024 * 1024 })
-  execFileSync('curl', ['-sS', '--fail', '-A', UA, '-o', pProg, PROGETTI], { maxBuffer: 1024 * 1024 })
+  curlToFile(TERRITORI, pTerr, { rejectEmpty: true })
+  curlToFile(PROGETTI, pProg, { rejectEmpty: true })
 
-  const storage_path = await landSnapshot(SRC, SNAP, 'progetti_territori.csv', readFileSync(pTerr), 'text/csv')
+  // Snapshot raw di ENTRAMBI i CSV. progetti.csv (~117 MB: importi, titoli, misure) gzippato
+  // byte-fedele (gunzip restituisce i byte scaricati) per stare nei limiti di storage.
+  const pathTerr = await landSnapshot(SRC, 'progetti_territori.csv', readFileSync(pTerr), 'text/csv')
+  const storage_path = await landSnapshot(SRC, 'progetti.csv.gz', gzipSync(readFileSync(pProg)), 'application/gzip')
   const fonteId = await recordFonte({
     source: SRC, dataset_id: 'progetti_2025-09',
     titolo: 'OpenPNRR — progetti PNRR e localizzazioni per comune',
     url: PROGETTI, snapshot_date: SNAP, storage_path, formato: 'csv', license: 'ODbL-1.0',
     granularita: 'comune', note_path: 'notes/openpnrr.md',
-    quirks: 'CUP×comune; istat_id (tipologia=C)=codice_istat; importo NON ripartito tra comuni; stato per-progetto NON disponibile (ReGiS chiuso); S3 datati 2025-09',
+    quirks: `CUP×comune; istat_id (tipologia=C)=codice_istat; importo NON ripartito tra comuni; stato per-progetto NON disponibile (ReGiS chiuso); S3 datati 2025-09; snapshot progetti gzippato byte-fedele; secondo snapshot (territori): ${pathTerr}`,
   })
 
   // 1) localizations -> junction + wanted progetto_ids

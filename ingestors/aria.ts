@@ -1,13 +1,13 @@
 // dati.lombardia (Socrata) air quality (PILOT region) -> glossary.sensore_comune + mart.aria_misure (PM10).
 // Measurements have only idsensore; comune/inquinante/unit come from the station registry (join by NAME).
-import { sql } from './_framework/env'
+import type { Sql } from 'postgres'
+import { sql, SNAP } from './_framework/env'
 import { fetchJson } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
-import { normName, loadComuniByName, toNum, bulkUpsert } from './_framework/util'
+import { normName, loadComuniByName, toNum, bulkInsert, bulkUpsert } from './_framework/util'
 
 const SRC = 'dati_lombardia_aria'
-const SNAP = '2026-06-29'
 const REG_ID = 'ib47-atvt' // station/sensor registry
 const HIST_ID = 'g2hp-ar79' // measurements 2018 ->
 const NRT_ID = 'nicp-bhqi' // measurements current year
@@ -19,7 +19,8 @@ async function soda(id: string, params: Record<string, string>): Promise<Record<
   const limit = 50000
   let offset = 0
   for (;;) {
-    const qp = new URLSearchParams({ ...params, $limit: String(limit), $offset: String(offset) })
+    // $order esplicito: senza order Socrata non garantisce ordinamento stabile tra pagine con $offset
+    const qp = new URLSearchParams({ $order: 'idsensore', ...params, $limit: String(limit), $offset: String(offset) })
     const page = await fetchJson<Record<string, unknown>[]>(`${base}?${qp.toString()}`)
     out.push(...page)
     if (page.length < limit) break
@@ -34,10 +35,10 @@ async function main() {
 
   // 1) registry -> glossary.sensore_comune (the join hub)
   const reg = await soda(REG_ID, {})
-  await landSnapshot(SRC, SNAP, 'stazioni_ib47-atvt.json', Buffer.from(JSON.stringify(reg)), 'application/json')
+  const regPath = await landSnapshot(SRC, 'stazioni_ib47-atvt.json', Buffer.from(JSON.stringify(reg)), 'application/json')
   await recordFonte({
     source: SRC, dataset_id: REG_ID, titolo: 'dati.lombardia — stazioni qualita aria (registry)',
-    url: `https://www.dati.lombardia.it/resource/${REG_ID}.json`, snapshot_date: SNAP, formato: 'socrata-json',
+    url: `https://www.dati.lombardia.it/resource/${REG_ID}.json`, snapshot_date: SNAP, storage_path: regPath, formato: 'socrata-json',
     license: 'CC0-1.0', granularita: 'stazione->comune', note_path: 'notes/aria-lombardia.md',
     quirks: 'join comune by NAME (no ISTAT); idsensore text; storico N=attivo/S=storico',
   })
@@ -62,13 +63,14 @@ async function main() {
   console.log('PM10 sensors:', pm10Ids.length)
   if (pm10Ids.length === 0) { console.log('no PM10 sensors, stopping'); await sql.end(); return }
 
-  await sql`delete from mart.aria_misure where inquinante='PM10' and id_sensore = any(${pm10Ids})`
   const inList = pm10Ids.map((id) => `'${id}'`).join(',')
   const fetchPm10 = (dsId: string, where: string) =>
-    soda(dsId, { $select: 'idsensore,data,valore,stato', $where: `idsensore in(${inList}) and stato='VA' and ${where}` })
+    soda(dsId, { $select: 'idsensore,data,valore,stato', $where: `idsensore in(${inList}) and stato='VA' and ${where}`, $order: 'idsensore,data' })
 
-  const m2024 = await fetchPm10(HIST_ID, "data >= '2024-01-01T00:00:00' and data < '2025-01-01T00:00:00'")
-  const mNow = await fetchPm10(NRT_ID, "data >= '2026-01-01T00:00:00'")
+  const [m2024, mNow] = await Promise.all([
+    fetchPm10(HIST_ID, "data >= '2024-01-01T00:00:00' and data < '2025-01-01T00:00:00'"),
+    fetchPm10(NRT_ID, "data >= '2026-01-01T00:00:00'"),
+  ])
 
   const fonteMeas = await recordFonte({
     source: SRC, dataset_id: `${HIST_ID}+${NRT_ID}_PM10`, titolo: 'dati.lombardia — misure PM10 (2024 + corrente)',
@@ -90,13 +92,15 @@ async function main() {
     seen.add(key)
     rows.push({ comune_istat: sc.istat, id_sensore: String(m.idsensore), inquinante: 'PM10', data, valore: val, unita: sc.unita, fonte_id: fonteMeas })
   }
+  if (rows.length === 0) throw new Error('0 misure PM10 da Socrata — abort, mart.aria_misure non toccato')
   let inserted = 0
-  const CH = 2000
-  for (let i = 0; i < rows.length; i += CH) {
-    const c = rows.slice(i, i + CH)
-    await sql`insert into mart.aria_misure ${sql(c, 'comune_istat', 'id_sensore', 'inquinante', 'data', 'valore', 'unita', 'fonte_id')}`
-    inserted += c.length
-  }
+  // refresh atomico: delete+insert in transazione, un fetch fallito non lascia il mart svuotato
+  await sql.begin(async (sql) => {
+    await sql`delete from mart.aria_misure where inquinante='PM10' and id_sensore = any(${pm10Ids})`
+    // cast: bulkInsert dichiara Sql ma il callback di sql.begin dà TransactionSql (stessa base ISql)
+    inserted = await bulkInsert(sql as unknown as Sql, 'mart.aria_misure', rows,
+      ['comune_istat', 'id_sensore', 'inquinante', 'data', 'valore', 'unita', 'fonte_id'], 2000)
+  })
   console.log('aria_misure PM10 inserted:', inserted, '| 2024 rows:', m2024.length, '| current rows:', mNow.length)
   await sql.end()
 }

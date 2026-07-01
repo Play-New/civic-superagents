@@ -1,14 +1,14 @@
 // DAIT (Min. Interno) -> mart.amministratore_comune ("chi governa"). Full national refresh.
 // CRITICAL: DAIT comune codes are NOT ISTAT -> join by (denominazione_comune, sigla_provincia).
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
 import { fetchBuffer } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
-import { normName } from './_framework/util'
+import { normName, bulkInsert } from './_framework/util'
 import { parse } from 'csv-parse/sync'
+import type { Sql } from 'postgres'
 
 const SRC = 'dait_amministratori'
-const SNAP = '2026-06-29'
 const URL = 'https://dait.interno.gov.it/documenti/ammcom.csv'
 
 const itDate = (s: string | undefined): string | null => {
@@ -39,12 +39,12 @@ async function main() {
   }
 
   const buf = await fetchBuffer(URL)
-  const storage_path = await landSnapshot(SRC, SNAP, 'ammcom.csv', buf, 'text/csv')
+  const storage_path = await landSnapshot(SRC, 'ammcom.csv', buf, 'text/csv')
   const fonteId = await recordFonte({
     source: SRC, dataset_id: 'ammcom',
     titolo: 'Min. Interno DAIT — amministratori comunali in carica',
     url: URL, snapshot_date: SNAP, storage_path, formato: 'csv',
-    license: 'CC-BY-4.0',
+    license: 'non dichiarata — verificare prima di citare', // ground truth manifest.yaml/notes: NON assumere IODL/CC-BY
     granularita: 'comune', note_path: 'notes/dait-amministratori.md',
     quirks: 'header a riga 3 (2 righe meta); join per (denominazione_comune, sigla_provincia) — codici DAIT ≠ ISTAT; nomi UPPERCASE',
   })
@@ -53,7 +53,6 @@ async function main() {
     delimiter: ';', columns: true, from_line: 3, skip_empty_lines: true, relax_quotes: true, relax_column_count: true,
   }) as Record<string, string>[]
 
-  await sql`delete from mart.amministratore_comune` // full refresh
   const rows: Record<string, unknown>[] = []
   let unmatched = 0
   for (const r of records) {
@@ -68,13 +67,18 @@ async function main() {
       fonte_id: fonteId,
     })
   }
-  let n = 0
-  const CH = 2000
-  for (let i = 0; i < rows.length; i += CH) {
-    const c = rows.slice(i, i + CH)
-    await sql`insert into mart.amministratore_comune ${sql(c, 'comune_istat', 'cognome', 'nome', 'carica', 'incarico', 'sesso', 'data_nascita', 'lista', 'data_elezione', 'fonte_id')}`
-    n += c.length
-  }
+  if (rows.length === 0) throw new Error('0 righe dal parse DAIT — abort, mart.amministratore_comune non toccato')
+  // guard anti-drop parziale: una ripubblicazione DAIT dimezzata non deve sostituire silenziosamente il mart
+  const [{ esistenti }] = await sql<{ esistenti: number }[]>`select count(*)::int as esistenti from mart.amministratore_comune`
+  if (esistenti > 0 && rows.length < esistenti * 0.5)
+    throw new Error(`parse parziale sospetto: ${rows.length} righe nuove vs ${esistenti} esistenti (< 50%) — abort, mart.amministratore_comune non toccato`)
+  // full refresh atomico: delete+insert in transazione, un crash a metà non svuota il mart
+  const n = await sql.begin(async (sql) => {
+    await sql`delete from mart.amministratore_comune`
+    // cast: nei typings di postgres 3.4 TransactionSql non è assegnabile a Sql (entrambi estendono ISql); a runtime è lo stesso handle
+    return bulkInsert(sql as unknown as Sql, 'mart.amministratore_comune', rows,
+      ['comune_istat', 'cognome', 'nome', 'carica', 'incarico', 'sesso', 'data_nascita', 'lista', 'data_elezione', 'fonte_id'], 2000)
+  })
   console.log('amministratori inserted:', n, '| unmatched comuni:', unmatched, '| source rows:', records.length)
   await sql.end()
 }

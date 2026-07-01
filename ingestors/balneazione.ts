@@ -1,6 +1,6 @@
 // EEA/WISE Bathing Water (via EMODnet) -> mart.balneazione_sito. CSV (stato per anno) + shapefile (nome/coord).
 // comune via PostGIS spatial join (ground truth), fallback al codice ISTAT incorporato nel sito_id.
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
 import { fetchBuffer } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
@@ -13,7 +13,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SRC = 'eea_balneazione'
-const SNAP = '2026-06-29'
 const URL =
   'https://ows.emodnet-humanactivities.eu/geonetwork/srv/api/records/8d85660c-7930-40dc-8733-96abdcf4bca7/attachments/EMODnet_HA_Environment_StatusBathingWater_20260116.zip'
 
@@ -21,7 +20,7 @@ async function main() {
   await ensureBucket()
   const valid = await loadComuneSet()
   const zipBuf = await fetchBuffer(URL)
-  const storage_path = await landSnapshot(SRC, SNAP, 'EMODnet_StatusBathingWater.zip', zipBuf, 'application/zip')
+  const storage_path = await landSnapshot(SRC, 'EMODnet_StatusBathingWater.zip', zipBuf, 'application/zip')
   const zip = new AdmZip(zipBuf)
   const csvEntry = zip.getEntries().find((e) => /BathingWaterStatus_\d+\.csv$/.test(e.entryName))
   const shpEntry = zip.getEntries().find((e) => /BathingWaterSites_\d+\.shp$/.test(e.entryName))

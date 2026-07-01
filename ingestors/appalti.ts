@@ -1,25 +1,23 @@
 // ANAC -> mart.appalto: appalti aggiudicati dove la stazione appaltante è un COMUNE (2024).
 // 4 dataset uniti su CIG: cig (master) + stazioni-appaltanti (CF->comune) + aggiudicazioni (importo) + aggiudicatari (vincitore).
-import { sql } from './_framework/env'
-import { ensureBucket, landSnapshot } from './_framework/storage'
+import { sql, SNAP } from './_framework/env'
 import { recordFonte } from './_framework/provenance'
+import { curlToFile } from './_framework/download'
 import { parseDotNumber, loadComuneSet, bulkUpsert } from './_framework/util'
 import { parse } from 'csv-parse'
-import { createReadStream, readdirSync, rmSync, mkdirSync, statSync } from 'node:fs'
+import { createReadStream, readdirSync, rmSync, mkdirSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const SRC = 'anac_appalti'
-const SNAP = '2026-06-30'
 const ANNO = 2024
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36'
 const BASE = 'https://dati.anticorruzione.it/opendata/download/dataset'
 
 async function streamZipCsvs(url: string, name: string, onRow: (r: Record<string, string>) => void): Promise<void> {
   const zip = join(tmpdir(), `anac_${name}.zip`)
   const dir = join(tmpdir(), `anac_${name}`)
-  execFileSync('curl', ['-sSL', '--fail', '-A', UA, '-o', zip, url], { maxBuffer: 1024 * 1024 })
+  curlToFile(url, zip, { rejectEmpty: true }) // UA browser condiviso (WAF ANAC) + retry integrato
   rmSync(dir, { recursive: true, force: true }); mkdirSync(dir, { recursive: true })
   execFileSync('unzip', ['-o', '-j', zip, '*.csv', '-d', dir], { maxBuffer: 1024 * 1024 })
   for (const f of readdirSync(dir)) {
@@ -31,7 +29,6 @@ async function streamZipCsvs(url: string, name: string, onRow: (r: Record<string
 }
 
 async function main() {
-  await ensureBucket()
   const valid = await loadComuneSet()
 
   // 1) stazioni appaltanti = comuni: CF -> comune_istat
@@ -51,43 +48,58 @@ async function main() {
 
   // 2) cig master 2024 -> solo gare bandite da un comune
   const cigMaster = new Map<string, Record<string, unknown>>()
+  const cancellati = new Set<string>()
   for (let m = 1; m <= 12; m++) {
     const mm = String(m).padStart(2, '0')
-    try {
-      await streamZipCsvs(`${BASE}/cig-${ANNO}/filesystem/cig_csv_${ANNO}_${mm}.zip`, `cig_${mm}`, (r) => {
-        const cf = (r.cf_amministrazione_appaltante ?? '').trim()
-        const c = cfToComune.get(cf)
-        if (!c) return
-        const cig = (r.cig ?? '').trim()
-        if (!cig || cigMaster.has(cig)) return
-        cigMaster.set(cig, {
-          cig, comune_istat: c.istat, stazione_appaltante: r.denominazione_amministrazione_appaltante || c.denom, cf_stazione: cf,
-          importo_base: parseDotNumber(r.importo_complessivo_gara), oggetto: r.oggetto_gara || r.oggetto_lotto || null, anno: ANNO,
-        })
+    // un mese perso in silenzio = gare comunali che spariscono: curlToFile ritenta 3 volte, poi il throw abortisce il run
+    await streamZipCsvs(`${BASE}/cig-${ANNO}/filesystem/cig_csv_${ANNO}_${mm}.zip`, `cig_${mm}`, (r) => {
+      const cf = (r.cf_amministrazione_appaltante ?? '').trim()
+      const c = cfToComune.get(cf)
+      if (!c) return
+      const cig = (r.cig ?? '').trim()
+      if (!cig) return
+      // CIG revocati/cancellati restano in elenco (stato=CANCELLATO + motivo/data cancellazione) -> scartati
+      if ((r.stato ?? '').trim().toUpperCase() === 'CANCELLATO' || (r.DATA_CANCELLAZIONE ?? '').trim() || (r.MOTIVO_CANCELLAZIONE ?? '').trim()) {
+        cancellati.add(cig); cigMaster.delete(cig); return
+      }
+      if (cigMaster.has(cig)) return
+      cigMaster.set(cig, {
+        cig, comune_istat: c.istat, stazione_appaltante: r.denominazione_amministrazione_appaltante || c.denom, cf_stazione: cf,
+        importo_base: parseDotNumber(r.importo_complessivo_gara), oggetto: r.oggetto_gara || r.oggetto_lotto || null, anno: ANNO,
       })
-    } catch (e) { console.log(`  cig ${mm}: ${(e as Error).message.slice(0, 60)}`) }
+    })
     if (m % 3 === 0) console.log(`  cig fino a ${mm}: ${cigMaster.size} gare comunali`)
   }
   const cigSet = new Set(cigMaster.keys())
-  console.log('CIG comunali 2024:', cigSet.size)
+  console.log('CIG comunali 2024:', cigSet.size, '| cancellati/revocati scartati:', cancellati.size)
 
-  // 3) aggiudicazioni -> importo + esito (per i CIG raccolti)
-  const agg = new Map<string, { importo: number | null; esito: string | null }>()
+  // 3) aggiudicazioni -> importo + esito (per i CIG raccolti). Un CIG può avere più eventi di
+  // aggiudicazione (id_aggiudicazione): teniamo il più recente (id più alto; -1 = legacy/non assegnato)
+  const idAgg = (r: Record<string, string>) => { const n = Number.parseInt((r.id_aggiudicazione ?? '').trim(), 10); return Number.isNaN(n) ? -1 : n }
+  const agg = new Map<string, { id: number; importo: number | null; esito: string | null }>()
   await streamZipCsvs(`${BASE}/aggiudicazioni/filesystem/aggiudicazioni_csv.zip`, 'aggz', (r) => {
     const cig = (r.cig ?? '').trim()
-    if (!cigSet.has(cig) || agg.has(cig)) return
-    agg.set(cig, { importo: parseDotNumber(r.importo_aggiudicazione), esito: r.esito || null })
+    if (!cigSet.has(cig)) return
+    const id = idAgg(r)
+    const prev = agg.get(cig)
+    if (prev && prev.id >= id) return
+    agg.set(cig, { id, importo: parseDotNumber(r.importo_aggiudicazione), esito: r.esito || null })
   })
   console.log('aggiudicazioni trovate:', agg.size)
 
-  // 4) aggiudicatari -> vincitore (preferenza MANDATARIA)
-  const win = new Map<string, { denom: string; cf: string }>()
+  // 4) aggiudicatari -> vincitore (preferenza MANDATARIA) dello STESSO evento tenuto in agg
+  const win = new Map<string, { id: number; denom: string | null; cf: string | null }>()
   await streamZipCsvs(`${BASE}/aggiudicatari/filesystem/aggiudicatari_csv.zip`, 'aggr', (r) => {
     const cig = (r.cig ?? '').trim()
     if (!cigSet.has(cig)) return
-    const ruolo = (r.ruolo ?? '').toUpperCase()
-    if (win.has(cig) && ruolo !== 'MANDATARIA') return
-    win.set(cig, { denom: r.denominazione || '', cf: r.codice_fiscale || '' })
+    const id = idAgg(r)
+    const a = agg.get(cig)
+    if (a && id !== a.id) return // vincitore e importo/esito devono venire dallo stesso evento
+    const prev = win.get(cig)
+    // senza aggiudicazione: vince l'evento più recente; a parità di evento prima riga, salvo MANDATARIA
+    if (prev && (id < prev.id || (id === prev.id && (r.ruolo ?? '').toUpperCase() !== 'MANDATARIA'))) return
+    // denominazione vuota -> null (non ''), altrimenti passa i filtri `aggiudicatario is not null` a valle
+    win.set(cig, { id, denom: (r.denominazione ?? '').trim() || null, cf: (r.codice_fiscale ?? '').trim() || null })
   })
   console.log('aggiudicatari trovati:', win.size)
 
@@ -95,7 +107,7 @@ async function main() {
     source: SRC, dataset_id: `appalti_comuni_${ANNO}`, titolo: 'ANAC — appalti aggiudicati con stazione appaltante comunale',
     url: `${BASE}/cig-${ANNO}`, snapshot_date: SNAP, formato: 'csv-zip', license: 'CC-BY-4.0',
     latest_usable_year: ANNO, granularita: 'comune', note_path: 'notes/anac-appalti.md',
-    quirks: 'SA=comune (denominazione LIKE COMUNE%); join CIG su 4 dataset; soglia ~€40k (sotto-soglia SmartCIG escluso); importo=aggiudicazione, importo_base=base gara; vincitore preferito MANDATARIA',
+    quirks: 'SA=comune (denominazione LIKE COMUNE%); join CIG su 4 dataset; soglia ~€40k (sotto-soglia SmartCIG escluso); importo=aggiudicazione, importo_base=base gara; vincitore preferito MANDATARIA; CIG cancellati/revocati esclusi; vincitore+importo dallo stesso evento (id_aggiudicazione max); nessuno storage_path: raw zip NON snapshottati per dimensioni (151 MB-GB) — ANAC ripubblica gli stessi zip mensili a URL stabili, riscaricare da lì per riprodurre',
   })
 
   const rows: Record<string, unknown>[] = []

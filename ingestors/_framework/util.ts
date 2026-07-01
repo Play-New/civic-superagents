@@ -1,3 +1,4 @@
+import type { Sql } from 'postgres'
 import { sql } from './env'
 
 // Italian number: thousands '.', decimal ',', optional '%' suffix, space-padded; '-' / '' => null.
@@ -59,6 +60,24 @@ export async function loadComuniByName(regione?: string): Promise<Map<string, st
   const m = new Map<string, string>()
   for (const r of rows) m.set(normName(r.denominazione), r.codice_istat)
   return m
+}
+
+// Chunked plain INSERT, nessuna on conflict. Prende l'handle sql come parametro
+// così funziona anche dentro sql.begin (refresh atomico delete+insert).
+export async function bulkInsert(
+  sql: Sql,
+  table: string,
+  rows: Record<string, unknown>[],
+  cols: string[],
+  chunk = 1000,
+): Promise<number> {
+  let done = 0
+  for (let i = 0; i < rows.length; i += chunk) {
+    const slice = rows.slice(i, i + chunk)
+    await sql`insert into ${sql.unsafe(table)} ${sql(slice, ...cols)}`
+    done += slice.length
+  }
+  return done
 }
 
 // Chunked bulk upsert. `update` lists the columns to refresh on conflict.

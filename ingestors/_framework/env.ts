@@ -13,6 +13,9 @@ export const SERVICE_KEY = need('SUPABASE_SERVICE_ROLE_KEY')
 export const DB_URL = need('SUPABASE_DB_URL')
 export const RAW_BUCKET = 'raw'
 
+// Data snapshot della run (YYYY-MM-DD, UTC): default oggi, override con SNAP= per ri-registrare una data specifica.
+export const SNAP = process.env.SNAP || new Date().toISOString().slice(0, 10)
+
 // postgres.js. prepare:false keeps it friendly to the Supabase poolers.
 export const sql = postgres(DB_URL, { prepare: false, idle_timeout: 20, max: 5 })
 

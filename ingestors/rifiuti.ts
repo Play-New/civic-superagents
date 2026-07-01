@@ -1,13 +1,12 @@
 // ISPRA Catasto Rifiuti -> mart.rifiuti_comune_anno (municipal waste per comune per year).
 // CSV: ';' separated, decimal=',' thousands='.', leading tabs, '-'/empty=null. procapite is COMPUTED.
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
 import { fetchBuffer } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
 import { parseItNumber, loadComuneSet, bulkUpsert } from './_framework/util'
 
 const SRC = 'ispra_catasto_rifiuti'
-const SNAP = '2026-06-29'
 const YEARS = [2020, 2021, 2022, 2023, 2024]
 const urlFor = (y: number) => `https://www.catasto-rifiuti.isprambiente.it/get/getDettaglioComunale.csv.php?&aa=${y}`
 
@@ -26,7 +25,7 @@ async function main() {
   for (const year of YEARS) {
     const url = urlFor(year)
     const buf = await fetchBuffer(url)
-    const storage_path = await landSnapshot(SRC, String(year), `RUComunali_${year}.csv`, buf, 'text/csv')
+    const storage_path = await landSnapshot(SRC, `${year}/RUComunali_${year}.csv`, buf, 'text/csv')
     const fonteId = await recordFonte({
       source: SRC,
       dataset_id: `RUComunali_${year}`,
@@ -35,7 +34,7 @@ async function main() {
       snapshot_date: SNAP,
       storage_path,
       formato: 'csv',
-      license: 'CC-BY-4.0',
+      license: 'ISPRA (verificare)', // ground truth manifest.yaml: licenza non ancora verificata
       latest_usable_year: year,
       granularita: 'comune',
       note_path: 'notes/ispra-rifiuti.md',

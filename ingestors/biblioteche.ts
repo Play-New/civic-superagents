@@ -1,5 +1,5 @@
 // ICCU Anagrafe Biblioteche -> mart.biblioteca_comune (cultura wedge). CC0, ISTAT-keyed.
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
 import { fetchBuffer } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
@@ -7,7 +7,6 @@ import { loadComuneSet, bulkUpsert } from './_framework/util'
 import AdmZip from 'adm-zip'
 
 const SRC = 'iccu_biblioteche'
-const SNAP = '2026-06-29'
 const URL = 'https://opendata.anagrafe.iccu.sbn.it/biblioteche.zip'
 
 interface Bib {
@@ -22,7 +21,7 @@ async function main() {
   await ensureBucket()
   const valid = await loadComuneSet()
   const zipBuf = await fetchBuffer(URL)
-  const storage_path = await landSnapshot(SRC, SNAP, 'biblioteche.zip', zipBuf, 'application/zip')
+  const storage_path = await landSnapshot(SRC, 'biblioteche.zip', zipBuf, 'application/zip')
   const entry = new AdmZip(zipBuf).getEntries().find((e) => e.entryName.endsWith('.json'))
   if (!entry) throw new Error('no json in zip')
   const data = JSON.parse(entry.getData().toString('utf8')) as { biblioteche: Bib[] }

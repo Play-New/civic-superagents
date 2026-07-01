@@ -133,74 +133,70 @@ const TOOLS = [
   },
 ]
 
+type Args = Record<string, unknown>
+type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean }
+
+// envelope MCP: risultato JSON pretty-printed in un blocco text
+const wrap = (v: unknown): ToolResult => ({ content: [{ type: 'text', text: JSON.stringify(v, null, 2) }] })
+const errore = (payload: Record<string, unknown>): ToolResult => ({ content: [{ type: 'text', text: JSON.stringify(payload) }], isError: true })
+
+// L'SDK MCP non valida gli enum dell'inputSchema lato server: senza questo check un valore
+// fuori enum (es. tipo='Coesione') verrebbe coercito in silenzio al default. Meglio un errore chiaro.
+function enumParam(a: Args, nome: string, ammessi: string[], fallback?: string): string {
+  const v = a[nome] ?? fallback
+  if (v === undefined) throw new Error(`parametro '${nome}' mancante — valori ammessi: ${ammessi.join(', ')}`)
+  if (typeof v !== 'string' || !ammessi.includes(v)) throw new Error(`parametro '${nome}' non valido: '${String(v)}' — valori ammessi: ${ammessi.join(', ')}`)
+  return v
+}
+
+// pattern comune ai tool per-comune: risolvi nome/ISTAT o rispondi 'comune non trovato'
+async function withComune(input: unknown, fn: (istat: string) => Promise<unknown>): Promise<ToolResult> {
+  const istat = await resolveComune(String(input ?? ''))
+  if (!istat) return errore({ errore: 'comune non trovato', suggerimento: 'usa cerca_comune per il nome esatto' })
+  return wrap(await fn(istat))
+}
+
+const HANDLERS: Record<string, (a: Args) => Promise<ToolResult>> = {
+  cerca_comune: async (a) => wrap(await cercaComune(String(a.nome ?? ''))),
+  leggi_comune: (a) => withComune(a.comune, leggiComune),
+  progetti_comune: async (a) => {
+    const tipo = enumParam(a, 'tipo', ['pnrr', 'coesione']) as 'pnrr' | 'coesione'
+    return withComune(a.comune, (istat) => progettiComune(istat, tipo, a.limite ? Number(a.limite) : 20))
+  },
+  confronta_comuni: async (a) => {
+    const [ia, ib] = await Promise.all([resolveComune(String(a.comune_a ?? '')), resolveComune(String(a.comune_b ?? ''))])
+    if (!ia || !ib) return errore({ errore: 'comune non trovato', a: ia, b: ib })
+    return wrap(await confrontaComuni(ia, ib))
+  },
+  classifica: async (a) =>
+    wrap(await classifica(String(a.tema ?? ''), { regione: a.regione ? String(a.regione) : null, ordine: enumParam(a, 'ordine', ['desc', 'asc'], 'desc') as 'desc' | 'asc', limite: a.limite ? Number(a.limite) : 10 })),
+  appalti_comune: (a) => withComune(a.comune, (istat) => appaltiComune(istat, a.limite ? Number(a.limite) : 15)),
+  helper_foia: async (a) => wrap(helperFoia(String(a.oggetto ?? ''), a.ente ? String(a.ente) : undefined)),
+  domande_da_verificare: async () => wrap(await domandeDaVerificare()),
+  // esito qui non passa da enumParam: firmaRisposta (review.ts) valida già e lancia un errore italiano chiaro
+  firma_risposta: async (a) =>
+    wrap(await firmaRisposta(String(a.id ?? ''), String(a.esito ?? ''), a.risposta_corretta ? String(a.risposta_corretta) : undefined, a.note ? String(a.note) : undefined, a.verificatore ? String(a.verificatore) : undefined)),
+  fonti_da_verificare: async () => wrap(await fontiDaVerificare()),
+  verifica_licenza: async (a) => {
+    const esito = enumParam(a, 'esito', ['verificata', 'da_verificare']) // verificaLicenza da sola coercerebbe in silenzio a 'da_verificare'
+    return wrap(await verificaLicenza(String(a.source ?? ''), esito, a.license ? String(a.license) : undefined, a.note ? String(a.note) : undefined, a.verificatore ? String(a.verificatore) : undefined))
+  },
+}
+
 export function createServer(): Server {
   const server = new Server({ name: 'civic-superagents', version: '0.1.0' }, { capabilities: { tools: {} } })
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-  const { name, arguments: args } = req.params
-  const a = (args ?? {}) as Record<string, unknown>
-  try {
-    if (name === 'cerca_comune') {
-      const rows = await cercaComune(String(a.nome ?? ''))
-      return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] }
+    const { name, arguments: args } = req.params
+    const handler = HANDLERS[name]
+    if (!handler) return { content: [{ type: 'text', text: `tool sconosciuto: ${name}` }], isError: true }
+    try {
+      return await handler((args ?? {}) as Args)
+    } catch (e) {
+      return { content: [{ type: 'text', text: 'errore: ' + (e as Error).message }], isError: true }
     }
-    if (name === 'leggi_comune') {
-      const istat = await resolveComune(String(a.comune ?? ''))
-      if (!istat) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ errore: 'comune non trovato', suggerimento: 'usa cerca_comune per il nome esatto' }) }],
-          isError: true,
-        }
-      }
-      const profilo = await leggiComune(istat)
-      return { content: [{ type: 'text', text: JSON.stringify(profilo, null, 2) }] }
-    }
-    if (name === 'progetti_comune') {
-      const istat = await resolveComune(String(a.comune ?? ''))
-      if (!istat) return { content: [{ type: 'text', text: JSON.stringify({ errore: 'comune non trovato' }) }], isError: true }
-      const tipo = a.tipo === 'coesione' ? 'coesione' : 'pnrr'
-      const rows = await progettiComune(istat, tipo, a.limite ? Number(a.limite) : 20)
-      return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] }
-    }
-    if (name === 'confronta_comuni') {
-      const [ia, ib] = await Promise.all([resolveComune(String(a.comune_a ?? '')), resolveComune(String(a.comune_b ?? ''))])
-      if (!ia || !ib) return { content: [{ type: 'text', text: JSON.stringify({ errore: 'comune non trovato', a: ia, b: ib }) }], isError: true }
-      return { content: [{ type: 'text', text: JSON.stringify(await confrontaComuni(ia, ib), null, 2) }] }
-    }
-    if (name === 'classifica') {
-      const r = await classifica(String(a.tema ?? ''), { regione: a.regione ? String(a.regione) : null, ordine: a.ordine === 'asc' ? 'asc' : 'desc', limite: a.limite ? Number(a.limite) : 10 })
-      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
-    }
-    if (name === 'appalti_comune') {
-      const istat = await resolveComune(String(a.comune ?? ''))
-      if (!istat) return { content: [{ type: 'text', text: JSON.stringify({ errore: 'comune non trovato' }) }], isError: true }
-      const r = await appaltiComune(istat, a.limite ? Number(a.limite) : 15)
-      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
-    }
-    if (name === 'helper_foia') {
-      const r = helperFoia(String(a.oggetto ?? ''), a.ente ? String(a.ente) : undefined)
-      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
-    }
-    if (name === 'domande_da_verificare') {
-      return { content: [{ type: 'text', text: JSON.stringify(await domandeDaVerificare(), null, 2) }] }
-    }
-    if (name === 'firma_risposta') {
-      const r = await firmaRisposta(String(a.id ?? ''), String(a.esito ?? ''), a.risposta_corretta ? String(a.risposta_corretta) : undefined, a.note ? String(a.note) : undefined, a.verificatore ? String(a.verificatore) : undefined)
-      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
-    }
-    if (name === 'fonti_da_verificare') {
-      return { content: [{ type: 'text', text: JSON.stringify(await fontiDaVerificare(), null, 2) }] }
-    }
-    if (name === 'verifica_licenza') {
-      const r = await verificaLicenza(String(a.source ?? ''), String(a.esito ?? ''), a.license ? String(a.license) : undefined, a.note ? String(a.note) : undefined, a.verificatore ? String(a.verificatore) : undefined)
-      return { content: [{ type: 'text', text: JSON.stringify(r, null, 2) }] }
-    }
-    return { content: [{ type: 'text', text: `tool sconosciuto: ${name}` }], isError: true }
-  } catch (e) {
-    return { content: [{ type: 'text', text: 'errore: ' + (e as Error).message }], isError: true }
-  }
   })
 
   return server

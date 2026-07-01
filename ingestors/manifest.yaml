@@ -1,6 +1,7 @@
-# manifest.yaml — registro delle fonti del data lake.
-# Macchina-leggibile: ogni ingestor legge la sua entry da qui. È anche la versione
-# operativa della mappa (vedi notes/mappa-open-data-civici.md per la narrazione).
+# manifest.yaml — registro delle fonti del data lake (liveness, endpoint, licenze, tabelle target).
+# Leggibile da umani e macchine, ma NESSUN ingestor lo legge a runtime: i parametri vivono nel
+# codice di ogni ingestor; questo file + notes/<fonte>.md sono la ground truth da tenere allineata
+# a mano (vedi notes/mappa-open-data-civici.md per la narrazione).
 # Endpoint verificati live 2026-06-29. LE API ITALIANE CAMBIANO IN SILENZIO: riverificare prima di ogni release.
 #
 # campi: id, tema, classe (wedge|genesis|trap), endpoint, formato, license,
@@ -96,7 +97,7 @@ sources:
     granularita: comune|provincia|regione
     cadenza: variabile
     phase: 2
-    schema_target: "mart.* (comparazione mio comune vs media)"
+    schema_target: "geo.comuni (popolazione, ingestors/istat_popolazione.ts) + mart.welfare_comune (vedi istat_welfare)"
     quirks: "USARE v2 (/rest/v2/structure/dataflow/ e /data). v1 ha bug off-by-one su endPeriod. ~4.876 dataflow: demografia, welfare, cultura, scuola, lavoro."
 
   # ---- MONEY / GENESIS (phase 2) ----
@@ -109,7 +110,7 @@ sources:
     granularita: comune
     cadenza: annuale
     phase: 2
-    schema_target: "mart.bilancio_comune (0005)"
+    schema_target: "mart.bilancio_comune (0006)"
     quirks: "Endpoint custom (NON /api/3/). q= search rotto -> paginare client-side. ~3.831 dataset. Soldipubblici morto -> usare BDAP pagamenti_bilancio_dello_stato come proxy SIOPE."
 
   - id: opencoesione
@@ -121,7 +122,7 @@ sources:
     granularita: comune
     cadenza: quadrimestrale
     phase: 2
-    schema_target: "mart.pnrr_progetto (0005)"
+    schema_target: "mart.progetto_coesione + mart.progetto_comune (0005)"
     quirks: "Bulk regionale (LOM ~86 MB) invece del nazionale. 1.83M progetti / €358 mld snapshot 2026-02-28."
 
   # ---- GOVERNO (phase 2/3) ----
@@ -134,7 +135,7 @@ sources:
     granularita: comune
     cadenza: continua
     phase: 2
-    schema_target: "mart.amministratori_comune (0006)"
+    schema_target: "mart.amministratore_comune (0005)"
     quirks: "41 dataset, 'in carica' aggiornato 2026-06. Eligendo storico (risultati per comune dal 1946) come complemento."
 
   - id: normattiva
@@ -159,7 +160,7 @@ sources:
     granularita: impianto|comune
     cadenza: variabile
     phase: 3
-    schema_target: "mart.energia_* (0007)"
+    schema_target: "mart.cer_comune (0008)"
     quirks: "Atlaimpianti per-impianto (~790k); Elenco Configurazioni CER per comune/prov/reg."
 
   - id: iccu_biblioteche
@@ -171,7 +172,7 @@ sources:
     granularita: biblioteca->comune
     cadenza: giornaliera
     phase: 3
-    schema_target: "mart.biblioteche_comune (0007)"
+    schema_target: "mart.biblioteca_comune (0007)"
     quirks: "Unico wedge pulito della cultura. Geocodato, ISIL->comune. Musei via ISTAT (un flusso per-comune)."
 
   - id: eea_bathing_water
@@ -179,16 +180,17 @@ sources:
     classe: wedge
     endpoint: "https://www.eea.europa.eu/data-and-maps/data/bathing-water-directive-status-of-bathing-water-15"
     formato: xlsx+shp
-    license: "EEA"
+    license: "CC-BY-4.0 (verificata 2026-06-29 via mirror EMODnet — vedi notes/eea-balneazione.md)"
     granularita: sito->comune
     cadenza: annuale
     phase: 3
-    schema_target: "mart.balneazione_* (0007)"
+    schema_target: "mart.balneazione_sito (0007)"
     quirks: "Risolve il gap acque: Min. Salute portaleacque = SPA-only (refutato). EEA WISE per-sito georef -> comune."
 
   # ---- IMPLEMENTATI (source-id reale del codice; vedi notes/<fonte>.md per i quirk) ----
   # NB: alcuni id qui sopra sono planning-era e differiscono dal source-id nel codice
-  # (aria_lombardia=dati_lombardia_aria, gse_atlaimpianti_cer=gse_cer, eea_bathing_water=eea_balneazione, bdap=bdap_rendiconto).
+  # (aria_lombardia=dati_lombardia_aria, gse_atlaimpianti_cer=gse_cer, eea_bathing_water=eea_balneazione,
+#  bdap=bdap_rendiconto, geojson_italy_comuni=geojson_italy, miur_scuola=miur_edilizia_scolastica).
   - id: bdap_rendiconto
     tema: spesa_missione
     classe: genesis
@@ -210,7 +212,7 @@ sources:
     granularita: comune
     cadenza: mensile
     phase: 2
-    schema_target: "mart.pnrr_progetto (+ _comune)"
+    schema_target: "mart.pnrr_progetto + mart.pnrr_progetto_comune (0006)"
     quirks: "PNRR vero (ReGiS-derived); istat_id tipologia=C; importi non ripartiti; stato per-progetto non pubblico"
 
   - id: istat_welfare
@@ -224,6 +226,30 @@ sources:
     phase: 3
     schema_target: mart.welfare_comune
     quirks: "curl -g (WAF 500a undici); OR-list '+' rotto -> una query per indicatore; source-id=istat_sdmx"
+
+  - id: anac_appalti
+    tema: appalti
+    classe: genesis
+    endpoint: "https://dati.anticorruzione.it/opendata/download/dataset/cig-{YYYY}/..."   # + stazioni-appaltanti, aggiudicazioni, aggiudicatari
+    formato: csv-zip
+    license: "CC-BY-4.0 (verificata 2026-06-30 — vedi notes/anac-appalti.md)"
+    granularita: comune
+    cadenza: annuale
+    phase: 2
+    schema_target: "mart.appalto (0011)"
+    quirks: "User-Agent browser obbligatorio (WAF). 4 dataset uniti su CIG (master cig + SA + aggiudicazioni + aggiudicatari). Roma Capitale non matcha '^COMUNE' (L. 42/2009) -> match esatto dedicato. Copertura solo sopra ~€40k (SmartCIG escluso). 2024: ~331k gare comunali."
+
+  - id: eea_aria
+    tema: aria
+    classe: wedge
+    endpoint: "https://eeadmz1-downloads-api-appservice.azurewebsites.net/ParquetFile/urls"   # registro stazioni: discomap.eea.europa.eu/App/AQViewer
+    formato: parquet
+    license: "CC-BY-4.0"
+    granularita: stazione->comune
+    cadenza: annuale
+    phase: 3
+    schema_target: "mart.aria_comune_anno (0010)"
+    quirks: "PM10 E1a verificato (dataset=2), POST JSON -> ~809 parquet per sampling-point; filtrare AggType='day' + Validity>0; aggregazione via _aria_parquet.py (pyarrow); spatial join coord->comune: ~300 comuni con stazione (copertura sparsa per natura, non per bug)."
 
   # ---- TRAPPOLE (NON ingerire come wedge — dichiarare 'non pubblicato') ----
   - id: pnla_liste_attesa

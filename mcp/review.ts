@@ -7,10 +7,11 @@ export async function domandeDaVerificare() {
 }
 
 export async function firmaRisposta(id: string, esito: string, risposta_corretta?: string, note?: string, verificatore?: string) {
-  const stato = ['verificato', 'corretto', 'scartato'].includes(esito) ? esito : 'verificato'
+  const ammessi = ['verificato', 'corretto', 'scartato']
+  if (!ammessi.includes(esito)) throw new Error(`esito non riconosciuto: '${esito}' — valori ammessi: ${ammessi.join(', ')}`)
   const [r] = await sql`
     update meta.test_question
-    set stato = ${stato}, risposta = coalesce(${risposta_corretta ?? null}, risposta),
+    set stato = ${esito}, risposta = coalesce(${risposta_corretta ?? null}, risposta),
         note = ${note ?? null}, verificatore = ${verificatore ?? 'utente'}, data_verifica = current_date
     where id = ${id} returning id, stato, verificatore`
   return r ?? { errore: 'id non trovato: ' + id }

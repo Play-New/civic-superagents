@@ -1,6 +1,7 @@
 // ISPRA Consumo di suolo (ed. 2025, dati al 2024) -> mart.consumo_suolo_comune.
 // Single XLSX, sheet Comuni_2006_2024. anno hardcoded 2024 (stock). Join via PRO_COM -> zfill(6).
-import { sql } from './_framework/env'
+// Colonne risolte per NOME header a runtime (nota: ISPRA rimodella il file a ogni edizione).
+import { sql, SNAP } from './_framework/env'
 import { fetchBuffer } from './_framework/download'
 import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
@@ -8,24 +9,36 @@ import { toNum, loadComuneSet, bulkUpsert } from './_framework/util'
 import * as XLSX from 'xlsx'
 
 const SRC = 'ispra_consumo_suolo'
-const SNAP = '2026-06-29'
 const URL =
   'https://www.isprambiente.gov.it/it/attivita/suolo-e-territorio/suolo/il-consumo-di-suolo/consumo_di_suolo_estratto_dati_2025_anni_2006_2024.xlsx'
 const SHEET = 'Comuni_2006_2024'
 const ANNO = 2024
-const C_PROCOM = 0
-const C_INCR_NETTO = 34
-const C_HA = 37
-const C_PCT = 38
+// Etichette header attese (vedi notes/ispra-consumo-suolo.md): leggere per nome colonna, non per indice.
+const H_PROCOM = 'PRO_COM'
+const H_INCR_NETTO = `Incremento netto ${ANNO - 1}-${ANNO} [ettari]`
+const H_HA = `Suolo consumato ${ANNO} [ettari]`
+const H_PCT = `Suolo consumato ${ANNO} [%]`
 
 const r2 = (v: number | null) => (v != null ? Math.round(v * 100) / 100 : null)
+// Match case/whitespace-insensitive, tollerante su punteggiatura minore ([]().,-_ ecc.); '%' resta distintivo.
+const normHdr = (v: unknown) =>
+  String(v ?? '').toLowerCase().replace(/[[\]().,;:'"_\-–—]/g, ' ').replace(/\s+/g, ' ').trim()
+const findCol = (header: unknown[], label: string): number => {
+  const want = normHdr(label)
+  const i = header.findIndex((h) => normHdr(h) === want)
+  if (i < 0)
+    throw new Error(
+      `colonna '${label}' non trovata nell'header dello sheet '${SHEET}' — ISPRA ha rimodellato il file? Header attuale: ${header.map((h) => String(h ?? '')).join(' | ')}`,
+    )
+  return i
+}
 
 async function main() {
   await ensureBucket()
   const valid = await loadComuneSet()
   const buf = await fetchBuffer(URL)
   const storage_path = await landSnapshot(
-    SRC, '2025', 'consumo_suolo_2006_2024.xlsx', buf,
+    SRC, 'edizione2025/consumo_suolo_2006_2024.xlsx', buf,
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   )
   const fonteId = await recordFonte({
@@ -40,6 +53,12 @@ async function main() {
   const ws = wb.Sheets[SHEET]
   if (!ws) throw new Error(`sheet '${SHEET}' missing; have: ${wb.SheetNames.join(', ')}`)
   const aoa = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true })
+  const header = aoa[0]
+  if (!header?.length) throw new Error(`header mancante nello sheet '${SHEET}'`)
+  const C_PROCOM = findCol(header, H_PROCOM)
+  const C_INCR_NETTO = findCol(header, H_INCR_NETTO)
+  const C_HA = findCol(header, H_HA)
+  const C_PCT = findCol(header, H_PCT)
 
   const rows: Record<string, unknown>[] = []
   let skipped = 0

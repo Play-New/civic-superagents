@@ -1,32 +1,21 @@
 // ISTAT SDMX v2 -> geo.comuni.popolazione (+ answers demografia). One wildcard call, all comuni.
-import { sql } from './_framework/env'
+import { sql, SNAP } from './_framework/env'
+import { curlText } from './_framework/download'
+import { ensureBucket, landSnapshot } from './_framework/storage'
 import { recordFonte } from './_framework/provenance'
 import { parse } from 'csv-parse/sync'
-import { execFileSync } from 'node:child_process'
 
 const SRC = 'istat_sdmx'
-const SNAP = '2026-06-29'
 // 22_389 = popolazione residente al 1° gennaio (ultimo anno). Key: FREQ.REF_AREA.DATA_TYPE.SEX.AGE.MARITAL
 const URL = 'https://esploradati.istat.it/SDMXWS/rest/v2/data/dataflow/IT1/22_389/1.0/A.*.JAN.9.TOTAL.99'
 
 async function main() {
-  // NB: esploradati's WAF 500s on Node/undici fetch but serves curl fine — shell out to curl.
-  let text = ''
-  for (let attempt = 1; ; attempt++) {
-    try {
-      text = execFileSync(
-        'curl',
-        ['-sS', '--fail', '-A', 'Mozilla/5.0 (civic-superagents)', '-H', 'Accept: application/vnd.sdmx.data+csv;version=2.0.0', URL],
-        { maxBuffer: 128 * 1024 * 1024 },
-      ).toString('utf8')
-      break
-    } catch (e) {
-      if (attempt >= 4) throw e
-      console.log(`  ISTAT fetch failed, retry ${attempt}...`)
-      execFileSync('sleep', ['2'])
-    }
-  }
+  await ensureBucket()
+  // NB: la WAF di esploradati 500a su fetch Node/undici ma serve curl -> curlText; rejectEmpty copre il quirk "200 con 0 byte" (notes/istat-welfare.md)
+  const text = curlText(URL, { headers: [['Accept', 'application/vnd.sdmx.data+csv;version=2.0.0']], rejectEmpty: true, maxBufferMb: 128 })
+  const storage_path = await landSnapshot(SRC, '22_389_POPRES1.csv', Buffer.from(text, 'utf8'), 'text/csv')
   const records = parse(text, { columns: true, skip_empty_lines: true }) as Record<string, string>[]
+  if (records.length === 0) throw new Error('0 record dal dataflow 22_389: possibile regressione lato esploradati (quirk "200 con 0 byte", notes/istat-welfare.md)')
 
   // keep the latest year per comune (REF_AREA = 6-digit codice_istat)
   const best = new Map<string, { pop: number; anno: number }>()
@@ -43,7 +32,7 @@ async function main() {
   const fonteId = await recordFonte({
     source: SRC, dataset_id: '22_389_POPRES1',
     titolo: 'ISTAT — popolazione residente al 1° gennaio per comune',
-    url: URL, snapshot_date: SNAP, formato: 'sdmx-csv', license: 'CC-BY (ISTAT)',
+    url: URL, snapshot_date: SNAP, storage_path, formato: 'sdmx-csv', license: 'CC-BY (ISTAT)',
     granularita: 'comune', note_path: 'notes/istat-popolazione.md',
     quirks: "SDMX v2 wildcard A.*; REF_AREA=codice_istat; l'ultimo anno puo essere stima (OBS_STATUS=e); OR '+' rotto su esploradati, usare '*'",
   })
