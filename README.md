@@ -46,6 +46,12 @@ Registrazione locale in Claude Code:
 claude mcp add civic-superagents -- npx tsx /ABS/PATH/civic-superagents/mcp/stdio.ts
 ```
 
+È attiva anche un'istanza HTTP (Streamable HTTP) su **`https://civic.playnew.com/mcp`** — accesso protetto da bearer token:
+```bash
+claude mcp add --transport http civic-superagents https://civic.playnew.com/mcp --header "Authorization: Bearer <token>"
+```
+Per Claude Desktop, claude.ai e Messages API → [`mcp/README.md`](mcp/README.md#collegarsi-allistanza-live-per-client).
+
 ## Licenze delle fonti
 
 Ogni fonte è stata verificata (con URL di prova). Riuso libero **citando la fonte**; due fonti sono **share-alike**.

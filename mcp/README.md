@@ -44,6 +44,38 @@ MCP_AUTH_TOKEN=$(openssl rand -hex 32) npm run start:http
 # client: claude mcp add --transport http <nome> https://<tuo-host>/mcp --header "Authorization: Bearer <token>"
 ```
 
+## Collegarsi all'istanza live (per client)
+
+L'istanza del progetto è **`https://civic.playnew.com/mcp`**, protetta da bearer token: il link da solo non basta, serve anche il token (chiedilo a un maintainer). Come collegarla dipende dal client:
+
+**Claude Code (CLI / estensione IDE)**
+```bash
+claude mcp add --transport http civic-superagents https://civic.playnew.com/mcp \
+  --header "Authorization: Bearer <token>"
+```
+Da lì gli 11 tool compaiono in sessione: basta chiedere ad es. "leggimi il comune di Lecco".
+
+**Claude Desktop** — i custom connector dell'app non hanno un campo per header custom (solo OAuth o nessuna auth): usa il bridge [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) in `claude_desktop_config.json` (Settings → Developer → Edit Config):
+```json
+{
+  "mcpServers": {
+    "civic-superagents": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://civic.playnew.com/mcp",
+               "--header", "Authorization: Bearer <token>"]
+    }
+  }
+}
+```
+
+**claude.ai (web)** — oggi **non collegabile**: i custom connector web accettano solo OAuth o endpoint senza auth, non un bearer statico. Un'eventuale istanza aperta senza token dovrebbe prima escludere i 4 tool di revisione (scrivono su `meta.*`).
+
+**Messages API (sviluppatori)** — il connettore MCP dell'API Anthropic accetta il token direttamente:
+```json
+"mcp_servers": [{ "type": "url", "url": "https://civic.playnew.com/mcp",
+                  "authorization_token": "<token>" }]
+```
+
 ## Registrazione locale (stdio)
 
 ```bash
