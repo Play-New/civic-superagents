@@ -10,7 +10,12 @@ enabled = true
 port = 54321
 # Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
 # endpoints. `public` and `graphql_public` schemas are included by default.
-schemas = ["public", "graphql_public"]
+# `public` rimosso 2026-07-15: questo progetto non usa la Data API (serving = MCP su connessione
+# Postgres diretta; ingestion = Postgres diretto + Storage API). L'unica tabella in `public` è
+# spatial_ref_sys (PostGIS, owner supabase_admin, RLS non abilitabile da `postgres`): non esporla
+# chiude l'advisor rls_disabled_in_public e azzera la superficie REST. pg_graphql non è abilitato,
+# quindi graphql_public non serve nulla — resta solo perché PostgREST richiede almeno uno schema.
+schemas = ["graphql_public"]
 # Extra schemas to add to the search_path of every request.
 extra_search_path = ["public", "extensions"]
 # The maximum number of rows returns from a view, table, or stored procedure. Limits payload size
